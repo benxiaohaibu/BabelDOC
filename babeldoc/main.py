@@ -1,7 +1,9 @@
 import asyncio
 import logging
+import os
 from pathlib import Path
 from typing import Any
+from dotenv import load_dotenv
 
 import configargparse
 import tqdm
@@ -27,6 +29,7 @@ __version__ = "0.3.4"
 
 
 def create_parser():
+    load_dotenv()
     parser = configargparse.ArgParser(
         config_file_parser_class=configargparse.TomlConfigParser(["babeldoc"]),
     )
@@ -45,6 +48,10 @@ def create_parser():
         "--files",
         action="append",
         help="One or more paths to PDF files.",
+    )
+    parser.add_argument(
+        "--folder",
+        help="Path to a folder containing PDF files. All PDF files in the folder will be processed.",
     )
     parser.add_argument(
         "--debug",
@@ -223,16 +230,18 @@ def create_parser():
     )
     service_group.add_argument(
         "--openai-model",
-        default="gpt-4o-mini",
+        default=os.getenv("model", "gpt-4o-mini"),
         help="The OpenAI model to use for translation.",
     )
     service_group.add_argument(
         "--openai-base-url",
+        default=os.getenv("base-url"),
         help="The base URL for the OpenAI API.",
     )
     service_group.add_argument(
         "--openai-api-key",
         "-k",
+        default=os.getenv("api-key"),
         help="The API key for the OpenAI API.",
     )
 
@@ -265,12 +274,15 @@ async def main():
         logger.info("Warmup completed, exiting...")
         return
 
-    # 验证翻译服务选择
-    if not (args.openai or args.translate):
-        parser.error("必须选择一个翻译服务：--openai 或 --translate")
+    if not args.openai:
+        # 如果.env中有API key，默认使用OpenAI
+        if os.getenv("api-key"):
+            args.openai = True
+        else:
+            parser.error("必须选择一个翻译服务：--openai")
 
     # 验证 OpenAI 参数
-    if args.openai and not args.openai_api_key:
+    if args.openai and not args.openai_api_key  and not os.getenv("api-key"):
         parser.error("使用 OpenAI 服务时必须提供 API key")
 
     # 实例化翻译器
@@ -301,18 +313,37 @@ async def main():
         table_model = None
 
     pending_files = []
-    for file in args.files:
-        # 清理文件路径，去除两端的引号
-        if file.startswith("--files="):
-            file = file[len("--files=") :]
-        file = file.lstrip("-").strip("\"'")
-        if not Path(file).exists():
-            logger.error(f"文件不存在：{file}")
+    # 处理 --folder 参数
+    if args.folder:
+        folder_path = Path(args.folder.strip("\"'"))
+        if not folder_path.exists() or not folder_path.is_dir():
+            logger.error(f"文件夹不存在：{args.folder}")
             exit(1)
-        if not file.endswith(".pdf"):
-            logger.error(f"文件不是 PDF 文件：{file}")
-            exit(1)
-        pending_files.append(file)
+        # 遍历文件夹中所有的PDF文件
+        for pdf_file in folder_path.glob("*.pdf"):
+            pending_files.append(str(pdf_file))
+        if not pending_files:
+            logger.warning(f"文件夹中没有找到PDF文件：{args.folder}")
+
+    # 处理 --files 参数
+    if args.files:
+        for file in args.files:
+            # 清理文件路径，去除两端的引号
+            if file.startswith("--files="):
+                file = file[len("--files=") :]
+            file = file.lstrip("-").strip("\"'")
+            if not Path(file).exists():
+                logger.error(f"文件不存在：{file}")
+                exit(1)
+            if not file.endswith(".pdf"):
+                logger.error(f"文件不是 PDF 文件：{file}")
+                exit(1)
+            pending_files.append(file)
+
+    # 检查是否有待处理的文件
+    if not pending_files:
+        logger.error("没有找到要处理的PDF文件，请使用 --files 或 --folder 参数指定文件")
+        exit(1)
 
     if args.output:
         if not Path(args.output).exists():
