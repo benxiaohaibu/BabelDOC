@@ -128,7 +128,7 @@ class TranslationConfig:
         Path(working_dir).mkdir(parents=True, exist_ok=True)
 
         if output_dir is None:
-            output_dir = Path.cwd()
+            output_dir = Path(input_file).parent
         self.output_dir = output_dir
 
         Path(output_dir).mkdir(parents=True, exist_ok=True)
